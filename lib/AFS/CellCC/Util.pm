@@ -30,7 +30,7 @@ use POSIX qw(WNOHANG WIFSIGNALED WTERMSIG WIFEXITED WEXITSTATUS);
 require Exporter;
 our @ISA = qw(Exporter);
 our @EXPORT_OK = qw(describe_file spawn_child monitor_child pretty_bytes scratch_ok
-                    calc_checksum);
+                    calc_checksum get_ids scratch_ok_jobs calc_checksum_jobs);
 
 # Return a "pretty" human-readable modification of a number of bytes. e.g.
 # "1.00 MB" instead of "1048576".
@@ -340,6 +340,66 @@ scratch_ok($$$$$) {
     return 1;
 }
 
+# Same as scratch_ok but receives several jobs. The destination cells of the
+# jobs received as an argument are requesting the same volume. Knowing that, we
+# dump the volume only once and create hardlinks for the jobs. Since the size
+# of the volume should be much greater than the size of the hardlinks, and
+# assuming we should not have that many destination cells, the size of the
+# hardlinks are not taken into consideration.
+sub
+scratch_ok_jobs($$$$@) {
+    my ($prev_state, $size, $scratch_dir, $scratch_min, @jobs) = @_;
+
+    if (!defined($scratch_min)) {
+        DEBUG "skipping scratch_ok_jobs check";
+        return 1;
+    }
+
+    my $pretty_size = pretty_bytes($size);
+
+    $scratch_min = _unpretty_bytes($scratch_min);
+
+    my $statfs = df($scratch_dir)
+        or die("Cannot get filesystem info for $scratch_dir: $!\n");
+
+    my $bytes_free = $statfs->{bfree} * 1024;
+    if ($size > $bytes_free) {
+        my $pretty_free = pretty_bytes($bytes_free);
+
+        for my $job (@jobs) {
+            WARN "job $job->{jobid} needs $size in $scratch_dir, but only ".
+                 "$pretty_free are free";
+            WARN "Not proceeding with job $job->{jobid}";
+            _scratch_rollback($job, $prev_state);
+        }
+        return 0;
+    }
+
+    my $bytes_left = $bytes_free - $size;
+    if ($bytes_left < $scratch_min) {
+        my $pretty_left = pretty_bytes($bytes_left);
+        my $pretty_min = pretty_bytes($scratch_min);
+
+        for my $job (@jobs) {
+            WARN "job $job->{jobid} ($pretty_size) would leave only $pretty_left ".
+                 "free in $scratch_dir, but we need $pretty_min";
+            WARN "Not proceeding with job $job->{jobid}";
+            _scratch_rollback($job, $prev_state);
+        }
+        return 0;
+    }
+
+    $bytes_left .= " (".pretty_bytes($bytes_left).")";
+    $scratch_min .= " (".pretty_bytes($scratch_min).")";
+
+    my $ids = get_ids(@jobs);
+    DEBUG "jobs $ids size $size leaves scratch dir $scratch_dir with ".
+          "$bytes_left free space, which is more than the configured minimum of ".
+          "$scratch_min";
+
+    return 1;
+}
+
 # Return the checksum of the file received as an argument.
 # The checksum returned by this function will be in following
 # format: "algorithm:checksum", where algorithm is one of
@@ -399,6 +459,73 @@ calc_checksum($$$$$$) {
     }
     $checksum = $digest->hexdigest;
     return "$algo:$checksum";
+}
+
+sub
+calc_checksum_jobs($$$$@) {
+    my ($dumpfh, $filesize, $algo, $state, @jobs) = @_;
+
+    if ($filesize < 0) {
+        die("The size of the file ($filesize) cannot be negative\n");
+    }
+
+    my $start = time();
+    my $now;
+
+    my $total = pretty_bytes($filesize);
+    my $bytes;
+    my $nbytes;
+
+    my $digest = Digest->new($algo);
+    my $checksum;
+
+    my $buf;
+    my $descr;
+    my $pos;
+
+    while (1) {
+        $nbytes = read($dumpfh, $buf, 16384);
+
+        if ($nbytes == 0) {
+            last;
+        }
+        if (!defined($nbytes)) {
+            die("Read of dump file failed: $!\n");
+        }
+        $digest->add($buf);
+
+        $now = time();
+        if ($now < $start || $now - $start > 60) {
+            $pos = tell($dumpfh);
+
+            if ($pos < 0) {
+                die("'tell' failed: $!\n");
+            }
+            $bytes = pretty_bytes($pos);
+            $descr = "Checksumming dump blob ($bytes / $total)";
+
+            for my $job (@jobs) {
+                update_job(jobid => $job->{jobid},
+                           dvref => \$job->{dv},
+                           to_state => $state,
+                           timeout => 120,
+                           description => $descr);
+            }
+            $start = time();
+        }
+    }
+    $checksum = $digest->hexdigest;
+    return "$algo:$checksum";
+}
+
+sub
+get_ids(@) {
+    my (@jobs) = @_;
+    my @ids;
+    for my $job (@jobs) {
+        push(@ids, $job->{jobid});
+    }
+    return join( ',', @ids );
 }
 
 1;
