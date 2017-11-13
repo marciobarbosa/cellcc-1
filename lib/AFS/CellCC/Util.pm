@@ -362,14 +362,16 @@ scratch_ok_jobs($$$$@) {
     my $statfs = df($scratch_dir)
         or die("Cannot get filesystem info for $scratch_dir: $!\n");
 
+    my $ids = get_ids(@jobs);
     my $bytes_free = $statfs->{bfree} * 1024;
     if ($size > $bytes_free) {
         my $pretty_free = pretty_bytes($bytes_free);
 
+        WARN "jobs $ids needs $size in $scratch_dir, but only ".
+             "$pretty_free are free";
+        WARN "Not proceeding with jobs $ids";
+
         for my $job (@jobs) {
-            WARN "job $job->{jobid} needs $size in $scratch_dir, but only ".
-                 "$pretty_free are free";
-            WARN "Not proceeding with job $job->{jobid}";
             _scratch_rollback($job, $prev_state);
         }
         return 0;
@@ -380,10 +382,11 @@ scratch_ok_jobs($$$$@) {
         my $pretty_left = pretty_bytes($bytes_left);
         my $pretty_min = pretty_bytes($scratch_min);
 
+        WARN "jobs $ids ($pretty_size) would leave only $pretty_left ".
+             "free in $scratch_dir, but we need $pretty_min";
+        WARN "Not proceeding with jobs $ids";
+
         for my $job (@jobs) {
-            WARN "job $job->{jobid} ($pretty_size) would leave only $pretty_left ".
-                 "free in $scratch_dir, but we need $pretty_min";
-            WARN "Not proceeding with job $job->{jobid}";
             _scratch_rollback($job, $prev_state);
         }
         return 0;
@@ -392,7 +395,6 @@ scratch_ok_jobs($$$$@) {
     $bytes_left .= " (".pretty_bytes($bytes_left).")";
     $scratch_min .= " (".pretty_bytes($scratch_min).")";
 
-    my $ids = get_ids(@jobs);
     DEBUG "jobs $ids size $size leaves scratch dir $scratch_dir with ".
           "$bytes_left free space, which is more than the configured minimum of ".
           "$scratch_min";

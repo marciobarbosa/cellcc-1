@@ -173,7 +173,7 @@ _calc_incremental($$) {
     return $remote_times->{update} - 3;
 }
 
-# Dump the volume associated with the given job. We calculate some info about
+# Dump the volume associated with the given jobs. We calculate some info about
 # the volume, dump it to disk, and report the result to the database.
 sub
 _do_dump($$$@) {
@@ -210,14 +210,18 @@ _do_dump($$$@) {
         return;
     }
 
-    for my $job (@jobs) {
-        update_job(jobid => $job->{jobid},
-                   dvref => \$job->{dv},
+    my $descr = "Starting to dump volume";
+    for my $i (0 ,, $#jobs) {
+        if ($i == 1) {
+            $descr = "Waiting for dump from job $jobs[0]->{jobid}";
+        }
+        update_job(jobid => $jobs[$i]->{jobid},
+                   dvref => \$jobs[$i]->{dv},
                    from_state => $state,
                    vol_lastupdate => $lastupdate,
                    timeout => 120,
-                   description => "Starting to dump volume");
-        $job->{vol_lastupdate} = $lastupdate;
+                   description => $descr);
+        $jobs[$i]->{vol_lastupdate} = $lastupdate;
     }
 
     my $ids = get_ids(@jobs);
@@ -264,10 +268,14 @@ _do_dump($$$@) {
                                                              \$last_bytes,
                                                              \$last_time);
 
-            my $descr = "Running vos dump ($pretty_bytes / $pretty_total dumped, $pretty_rate)";
-            for my $job (@jobs) {
-                update_job(jobid => $job->{jobid},
-                           dvref => \$job->{dv},
+            $descr = "Running vos dump ($pretty_bytes / $pretty_total dumped, $pretty_rate)";
+            for my $i (0 .. $#jobs) {
+                if ($i == 1) {
+                    $descr = "Dump being performed by job $jobs[0]->{jobid} " .
+                             "($pretty_bytes / $pretty_total dumped, $pretty_rate)";
+                }
+                update_job(jobid => $jobs[$i]->{jobid},
+                           dvref => \$jobs[$i]->{dv},
                            from_state => $state,
                            timeout => $interval+60,
                            description => $descr);
