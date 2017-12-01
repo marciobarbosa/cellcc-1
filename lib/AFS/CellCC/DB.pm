@@ -23,6 +23,7 @@ use DateTime::Format::MySQL;
 use Log::Log4perl qw(:easy);
 
 use AFS::CellCC::Config qw(config_get);
+use AFS::CellCC::Util qw(get_jobs_info);
 
 require Exporter;
 our @ISA = qw(Exporter);
@@ -482,6 +483,61 @@ update_job(%) {
     DEBUG "Update job $info{jobid} dv $dv$statestr";
 
     _job_set(%info);
+}
+
+# Similar to update_job but updates several jobs at once.
+sub
+update_jobs($%) {
+    my ($jobsref, %args) = @_;
+    my @jobs = @{$jobsref};
+    my %info = _check_args(\%args,
+        req => [qw(timeout
+        )],
+        opt => [qw(dbh
+                   from_state
+                   to_state
+                   dump_filename
+                   dump_fqdn
+                   dump_method
+                   dump_port
+                   dump_filename
+                   dump_checksum
+                   dump_filesize
+                   restore_filename
+                   description
+                   vol_lastupdate
+                   errorlimit_mtime
+        )],
+    );
+    my $dbh = $info{dbh};
+    if (!$dbh) {
+        db_rw(sub($) {
+            my ($sub_dbh) = @_;
+            $info{dbh} = $sub_dbh;
+            update_jobs($jobsref, %info);
+        });
+        return;
+    }
+    my @dvs = get_jobs_info("dvref", @jobs);
+    my @ids = get_jobs_info("jobid", @jobs);
+    @dvs = map {$$_} @dvs;
+
+    my $statestr = '';
+    if (exists $info{from_state}) {
+        $statestr .= " state $info{from_state}";
+    }
+    if (exists $info{to_state}) {
+        $statestr .= " -> state $info{to_state}";
+    }
+
+    DEBUG "Update jobs ". join( ',', @ids ) ." dvs ". join( ',', @dvs ) ."$statestr";
+
+    for my $job (@jobs) {
+        $info{jobid} = $job->{jobid};
+        $info{dvref} = \$job->{dv};
+
+        _job_set(%info);
+    }
 }
 
 # Moves all jobs in 'from_state' to 'to_state', and then returns all jobs in
