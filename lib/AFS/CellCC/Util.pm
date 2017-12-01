@@ -30,7 +30,7 @@ use POSIX qw(WNOHANG WIFSIGNALED WTERMSIG WIFEXITED WEXITSTATUS);
 require Exporter;
 our @ISA = qw(Exporter);
 our @EXPORT_OK = qw(describe_file spawn_child monitor_child pretty_bytes scratch_ok
-                    calc_checksum);
+                    calc_checksum get_jobs_info);
 
 # Return a "pretty" human-readable modification of a number of bytes. e.g.
 # "1.00 MB" instead of "1048576".
@@ -399,6 +399,20 @@ calc_checksum($$$$$$) {
     }
     $checksum = $digest->hexdigest;
     return "$algo:$checksum";
+}
+
+# Get the value of the field provided as an argument for every job and return
+# these values as an array.
+sub
+get_jobs_info($@) {
+    my ($field, @jobs) = @_;
+    my @info;
+    for my $job (@jobs) {
+        if (exists $job->{$field}) {
+            push(@info, $job->{$field});
+        }
+    }
+    return @info;
 }
 
 1;
