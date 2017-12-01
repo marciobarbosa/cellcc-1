@@ -23,7 +23,7 @@ use File::stat;
 use Filesys::Df;
 
 use AFS::CellCC::Config qw(config_get);
-use AFS::CellCC::DB qw(update_job);
+use AFS::CellCC::DB qw(update_job update_jobs);
 
 use POSIX qw(WNOHANG WIFSIGNALED WTERMSIG WIFEXITED WEXITSTATUS);
 
@@ -277,23 +277,26 @@ _unpretty_bytes($) {
 }
 
 # When there is not enough space free to store a dump blob on the local scratch
-# disk, call this to revert the job to the given state.
+# disk, call this to revert the jobs to the given state.
 sub
-_scratch_rollback($$) {
-    my ($job, $state) = @_;
-    update_job(jobid => $job->{jobid},
-               dvref => \$job->{dv},
-               to_state => $state,
-               timeout => undef,
-               description => "Waiting for enough scratch disk space to be free");
+_scratch_rollback($@) {
+    my ($state, @jobs) = @_;
+    update_jobs(\@jobs, to_state => $state,
+                        timeout => undef,
+                        description => "Waiting for enough scratch disk space to be free");
 }
 
 # This checks if there is enough disk space free in a scratch directory. If
-# there is not enough space, we log a warning and roll back the job to a known
-# state we can retry.
+# there is not enough space, we log a warning and roll back the jobs to a known
+# state we can retry. The destination cells of the jobs received as an argument
+# are requesting the same volume. Knowing that, we dump the volume only once and
+# create hardlinks for the jobs. Since the size of the volume should be much
+# greater than the size of the hardlinks, and assuming we should not have that
+# many destination cells, the size of the hardlinks are not taken into
+# consideration.
 sub
-scratch_ok($$$$$) {
-    my ($job, $prev_state, $size, $scratch_dir, $scratch_min) = @_;
+scratch_ok($$$$@) {
+    my ($prev_state, $size, $scratch_dir, $scratch_min, @jobs) = @_;
 
     if (!defined($scratch_min)) {
         DEBUG "skipping scratch_ok check";
@@ -304,6 +307,8 @@ scratch_ok($$$$$) {
 
     $scratch_min = _unpretty_bytes($scratch_min);
 
+    my @ids = get_jobs_info("jobid", @jobs);
+    my $idsbuff = join( ',', @ids );
     my $statfs = df($scratch_dir)
         or die("Cannot get filesystem info for $scratch_dir: $!\n");
 
@@ -311,10 +316,10 @@ scratch_ok($$$$$) {
     if ($size > $bytes_free) {
         my $pretty_free = pretty_bytes($bytes_free);
 
-        WARN "job $job->{jobid} needs $size in $scratch_dir, but only ".
+        WARN "job(s) $idsbuff need $size in $scratch_dir, but only ".
              "$pretty_free are free";
-        WARN "Not proceeding with job $job->{jobid}";
-        _scratch_rollback($job, $prev_state);
+        WARN "Not proceeding with job(s) $idsbuff";
+        _scratch_rollback($prev_state, @jobs);
         return 0;
     }
 
@@ -323,17 +328,17 @@ scratch_ok($$$$$) {
         my $pretty_left = pretty_bytes($bytes_left);
         my $pretty_min = pretty_bytes($scratch_min);
 
-        WARN "job $job->{jobid} ($pretty_size) would leave only $pretty_left ".
+        WARN "job(s) $idsbuff ($pretty_size) would leave only $pretty_left ".
              "free in $scratch_dir, but we need $pretty_min";
-        WARN "Not proceeding with job $job->{jobid}";
-        _scratch_rollback($job, $prev_state);
+        WARN "Not proceeding with job(s) $idsbuff";
+        _scratch_rollback($prev_state, @jobs);
         return 0;
     }
 
     $bytes_left .= " (".pretty_bytes($bytes_left).")";
     $scratch_min .= " (".pretty_bytes($scratch_min).")";
 
-    DEBUG "job $job->{jobid} size $size leaves scratch dir $scratch_dir with ".
+    DEBUG "job(s) $idsbuff size $size leaves scratch dir $scratch_dir with ".
           "$bytes_left free space, which is more than the configured minimum of ".
           "$scratch_min";
 

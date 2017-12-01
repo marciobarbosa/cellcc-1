@@ -207,9 +207,9 @@ _do_dump($$$) {
     my $dump_size = _get_size($job, $volname, $server, $partition, $lastupdate);
     DEBUG "got dump size $dump_size for volname $volname";
 
-    if (!scratch_ok($job, $prev_state, $dump_size,
+    if (!scratch_ok($prev_state, $dump_size,
                     config_get('dump/scratch-dir'),
-                    config_get('dump/scratch-minfree'))) {
+                    config_get('dump/scratch-minfree'), [$job])) {
         return;
     }
 
