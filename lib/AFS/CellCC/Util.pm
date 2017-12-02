@@ -352,8 +352,8 @@ scratch_ok($$$$@) {
 # checksum is the checksum of the file received as an argument.
 # This checksum will be in hexadecimal form.
 sub
-calc_checksum($$$$$$) {
-    my ($dumpfh, $filesize, $algo, $jobid, $dvref, $state) = @_;
+calc_checksum($$$$@) {
+    my ($dumpfh, $filesize, $algo, $state, @jobs) = @_;
 
     if ($filesize < 0) {
         die("The size of the file ($filesize) cannot be negative\n");
@@ -394,11 +394,10 @@ calc_checksum($$$$$$) {
             $bytes = pretty_bytes($pos);
             $descr = "Checksumming dump blob ($bytes / $total)";
 
-            update_job(jobid => $jobid,
-                       dvref => $dvref,
-                       to_state => $state,
-                       timeout => 120,
-                       description => $descr);
+            update_jobs(\@jobs,
+                        to_state => $state,
+                        timeout => 120,
+                        description => $descr);
             $start = time();
         }
     }

@@ -41,8 +41,8 @@ our @EXPORT_OK = qw(process_dumps);
 # currently just calculate a checksum for the dump blob, and update the
 # database to give the dump filename and metadata.
 sub
-_dump_success($$$$) {
-    my ($jobid, $dvref, $prev_state, $dump_fh) = @_;
+_dump_success($$@) {
+    my ($prev_state, $dump_fh, @jobs) = @_;
     my $done_state = 'DUMP_DONE';
     my $filesize = stat($dump_fh)->size;
 
@@ -53,20 +53,19 @@ _dump_success($$$$) {
     # Note that this checksum doesn't need to by cryptographically secure. md5
     # should be fine.
     my $algo = config_get('dump/checksum');
-    my $checksum = calc_checksum($dump_fh, $filesize, $algo, $jobid, $dvref, $prev_state);
+    my $checksum = calc_checksum($dump_fh, $filesize, $algo, $prev_state, @jobs);
 
-    update_job(jobid => $jobid,
-               dvref => $dvref,
-               from_state => $prev_state,
-               to_state => $done_state,
-               dump_fqdn => config_get('fqdn'),
-               dump_method => 'remctl',
-               dump_port => config_get('remctl/port'),
-               dump_filename => $base_file,
-               dump_checksum => $checksum,
-               dump_filesize => $filesize,
-               timeout => undef,
-               description => "Waiting to xfer dump file");
+    update_jobs(\@jobs,
+                from_state => $prev_state,
+                to_state => $done_state,
+                dump_fqdn => config_get('fqdn'),
+                dump_method => 'remctl',
+                dump_port => config_get('remctl/port'),
+                dump_filename => $base_file,
+                dump_checksum => $checksum,
+                dump_filesize => $filesize,
+                timeout => undef,
+                description => "Waiting to xfer dump file");
 
     # Keep the dump file around; we've reported to the db that we have it.
     $dump_fh->unlink_on_destroy(0);
@@ -285,7 +284,7 @@ _do_dump($$$) {
                description => "Processing finished dump file");
 
     DEBUG "vos dump successful, processing dump file";
-    _dump_success($job->{jobid}, \$job->{dv}, $state, $dump_fh);
+    _dump_success($state, $dump_fh, [$job]);
 
     INFO "Finished performing dump for job $job->{jobid} (vol '$job->{volname}', $job->{src_cell} -> $job->{dst_cell})";
 }
