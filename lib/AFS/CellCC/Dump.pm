@@ -312,18 +312,22 @@ process_dumps($$$@) {
         my $pid = $pm->start();
         if ($pid) {
             # In parent
-            DEBUG "Spawned child pid $pid to handle dump for job ".$job->{jobid};
+            DEBUG "Spawned child pid $pid to handle calc_incremental for job ".$job->{jobid};
             next;
         }
 
         # In child
         eval {
             eval {
-                _do_dump($server, $job, $start_state);
+                my $lastupdate = _calc_incremental($job, $start_state);
+                update_job(jobid => $job->{jobid},
+                           dvref => \$job->{dv},
+                           vol_lastupdate => $lastupdate,
+                           timeout => 3600);
             };
             if ($@) {
                 my $error = $@;
-                ERROR "Error when performing dump for job $job->{jobid}:";
+                ERROR "Error when performing calc_incremental for job $job->{jobid}:";
                 ERROR $error;
                 job_error(jobid => $job->{jobid}, dvref => \$job->{dv});
                 $pm->finish(1);
@@ -334,6 +338,78 @@ process_dumps($$$@) {
         # Make sure the child exits, and we don't propagate control back up to
         # our caller.
         exit(1);
+    }
+    $pm->wait_all_children();
+
+    @jobs = describe_jobs(src_cell => $src_cell,
+                          state => $start_state);
+
+    my %vol_table;
+    for my $job (@jobs) {
+        eval {
+            if (!defined($job->{vol_lastupdate}) {
+                # _calc_incremental said we can skip syncing the volume, so
+                # transition the job straight to the final stage
+                DEBUG "volume $job->{volname} appears to not need a sync";
+                update_job(jobid => $job->{jobid},
+                           dvref => \$job->{dv},
+                           from_state => $start_state,
+                           to_state => 'RELEASE_DONE',
+                           timeout => 0,
+                           description => "Remote volume appears to be up to date;" .
+                           "skipping sync");
+                next;
+            }
+            DEBUG "got lastupdate time $job->{vol_lastupdate} for volname $job->{volname}";
+            push(@{$vol_table{$job->{volname}}{$job->{vol_lastupdate}}}, $job);
+        };
+        if ($@) {
+            ERROR "Error when getting volume's timestamp for job $job->{jobid}:";
+            ERROR $error;
+            job_error(jobid => $job->{jobid}, dvref => \$job->{dv});
+        }
+    }
+
+    for my $volname (sort keys %vol_table) {
+        for my $lastupdate (sort keys %{$vol_table{$volname}}) {
+            # jobs per volume and timestamp
+            my @jbs = @{$vol_table{$volname}{$lastupdate}};
+            my $ids = get_jobs_info(@jbs);
+            my $pid = $pm->start();
+            if ($pid) {
+                # In parent
+                DEBUG "Spawned child pid $pid to handle dump for jobs ".
+                       join( ',', @ids );
+                next;
+            }
+
+            # In child
+            eval {
+                eval {
+                    _do_dump($server, $start_state, $lastupdate, @jbs);
+                };
+                if ($@) {
+                    my $error = $@;
+                    ERROR "Error when performing dump for jobs ".
+                           join( ',', @ids ) .":";
+                    ERROR $error;
+                    db_rw(sub($) {
+                        my ($sub_dbh) = @_;
+                        for my $job (@jbs) {
+                            job_error(dbh => $sub_dbh,
+                                      jobid => $job->{jobid},
+                                      dvref => \$job->{dv});
+                        }
+                    });
+                    $pm->finish(1);
+                } else {
+                    $pm->finish(0);
+                }
+            };
+            # Make sure the child exits, and we don't propagate control back up
+            # to our caller.
+            exit(1);
+        }
     }
 }
 
