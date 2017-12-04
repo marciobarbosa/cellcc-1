@@ -97,9 +97,6 @@ _checksum_valid($$$) {
     my ($job, $path, $state) = @_;
     my $fh;
 
-    my $jobid = $job->{jobid};
-    my $dvref = \$job->{dv};
-
     my ($algo, undef) = split(/:/, $job->{dump_checksum});
 
     if (!open($fh, '<', $path)) {
@@ -115,7 +112,7 @@ _checksum_valid($$$) {
 
     DEBUG "filesize valid (path $path): ".$sb->size;
 
-    my $checksum = calc_checksum($fh, $sb->size, $algo, $jobid, $dvref, $state);
+    my $checksum = calc_checksum($fh, $sb->size, $algo, $state, $job);
     close($fh);
 
     if ($checksum ne $job->{dump_checksum}) {
