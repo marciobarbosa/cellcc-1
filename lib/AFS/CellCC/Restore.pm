@@ -230,9 +230,9 @@ _do_xfer($$) {
     # First, we have to get the actual file from the dump host to the restore
     # host, unless the db says we already have it on the restore host.
     if (!$job->{restore_filename}) {
-        if (!scratch_ok($job, $start_state, $job->{dump_filesize},
+        if (!scratch_ok($start_state, $job->{dump_filesize},
                         config_get('restore/scratch-dir'),
-                        config_get('restore/scratch-minfree'))) {
+                        config_get('restore/scratch-minfree'), $job)) {
             return;
         }
 
