@@ -53,7 +53,8 @@ _dump_success($$$$) {
     # Note that this checksum doesn't need to by cryptographically secure. md5
     # should be fine.
     my $algo = config_get('dump/checksum');
-    my $checksum = calc_checksum($dump_fh, $filesize, $algo, $jobid, $dvref, $prev_state);
+    my %job = (jobid => $jobid, dv => $$dvref);
+    my $checksum = calc_checksum($dump_fh, $filesize, $algo, $prev_state, \%job);
 
     update_job(jobid => $jobid,
                dvref => $dvref,
