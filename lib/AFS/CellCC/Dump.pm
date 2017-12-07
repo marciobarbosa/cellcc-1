@@ -41,36 +41,51 @@ our @EXPORT_OK = qw(process_dumps);
 # currently just calculate a checksum for the dump blob, and update the
 # database to give the dump filename and metadata.
 sub
-_dump_success($$$$) {
-    my ($jobid, $dvref, $prev_state, $dump_fh) = @_;
+_dump_success($$$) {
+    my ($prev_state, $jobs_ref, $dump_fhs_ref) = @_;
+    my @jobs = @{$jobs_ref};
+    my @dump_fhs = @{$dump_fhs_ref};
     my $done_state = 'DUMP_DONE';
-    my $filesize = stat($dump_fh)->size;
+    my $filesize = stat($dump_fhs[0])->size;
 
-    my $base_file = basename($dump_fh->filename);
+    seek($dump_fhs[0], 0, 0);
 
-    seek($dump_fh, 0, 0);
-
+    for my $i (1 .. $#dump_fhs) {
+        if(-e $dump_fhs[$i]->filename) {
+            unlink($dump_fhs[$i]->filename)
+                or die("Cannot remove file: $!\n");
+        }
+        link($dump_fhs[0]->filename, $dump_fhs[$i]->filename)
+            or die("Cannot create hardlink: $!\n");
+    }
     # Note that this checksum doesn't need to by cryptographically secure. md5
     # should be fine.
     my $algo = config_get('dump/checksum');
-    my %job = (jobid => $jobid, dv => $$dvref);
-    my $checksum = calc_checksum($dump_fh, $filesize, $algo, $prev_state, \%job);
+    my $checksum = calc_checksum($dump_fhs[0], $filesize, $algo, $prev_state, @jobs);
 
-    update_job(jobid => $jobid,
-               dvref => $dvref,
-               from_state => $prev_state,
-               to_state => $done_state,
-               dump_fqdn => config_get('fqdn'),
-               dump_method => 'remctl',
-               dump_port => config_get('remctl/port'),
-               dump_filename => $base_file,
-               dump_checksum => $checksum,
-               dump_filesize => $filesize,
-               timeout => undef,
-               description => "Waiting to xfer dump file");
+    db_rw(sub($) {
+        my ($sub_dbh) = @_;
+        for my $i (0 .. $#jobs) {
+            update_job(dbh => $sub_dbh,
+                       jobid => $jobs[$i]->{jobid},
+                       dvref => \$jobs[$i]->{dv},
+                       from_state => $prev_state,
+                       to_state => $done_state,
+                       dump_fqdn => config_get('fqdn'),
+                       dump_method => 'remctl',
+                       dump_port => config_get('remctl/port'),
+                       dump_filename => basename($dump_fhs[$i]->filename),
+                       dump_checksum => $checksum,
+                       dump_filesize => $filesize,
+                       timeout => undef,
+                       description => "Waiting to xfer dump file");
+        }
+    });
 
     # Keep the dump file around; we've reported to the db that we have it.
-    $dump_fh->unlink_on_destroy(0);
+    for my $dump_fh (@dump_fhs) {
+        $dump_fh->unlink_on_destroy(0);
+    }
 }
 
 # Get the estimated dump size for the given volume.
@@ -286,7 +301,9 @@ _do_dump($$$) {
                description => "Processing finished dump file");
 
     DEBUG "vos dump successful, processing dump file";
-    _dump_success($job->{jobid}, \$job->{dv}, $state, $dump_fh);
+    my @jobs = ($job);
+    my @dump_fhs = ($dump_fh);
+    _dump_success($state, \@jobs, \@dump_fhs);
 
     INFO "Finished performing dump for job $job->{jobid} (vol '$job->{volname}', $job->{src_cell} -> $job->{dst_cell})";
 }
